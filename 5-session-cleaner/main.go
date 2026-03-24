@@ -20,17 +20,21 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
+	mu       sync.Mutex
 	sessions map[string]Session
 }
 
 // Session stores the session's data
 type Session struct {
-	Data map[string]interface{}
+	Data      map[string]interface{}
+	updatedAt time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -38,6 +42,21 @@ func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
 	}
+
+	go func() {
+		for {
+			now := <-time.Tick(5 * time.Second)
+			m.mu.Lock()
+
+			for sID, s := range m.sessions {
+				if now.Sub(s.updatedAt).Seconds() > 5 {
+					delete(m.sessions, sID)
+				}
+			}
+
+			m.mu.Unlock()
+		}
+	}()
 
 	return m
 }
@@ -49,9 +68,12 @@ func (m *SessionManager) CreateSession() (string, error) {
 		return "", err
 	}
 
+	m.mu.Lock()
 	m.sessions[sessionID] = Session{
-		Data: make(map[string]interface{}),
+		Data:      make(map[string]interface{}),
+		updatedAt: time.Now(),
 	}
+	m.mu.Unlock()
 
 	return sessionID, nil
 }
@@ -63,7 +85,9 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
 	if !ok {
 		return nil, ErrSessionNotFound
 	}
@@ -72,15 +96,19 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.mu.Lock()
 	_, ok := m.sessions[sessionID]
 	if !ok {
+		m.mu.Unlock()
 		return ErrSessionNotFound
 	}
 
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
-		Data: data,
+		Data:      data,
+		updatedAt: time.Now(),
 	}
+	m.mu.Unlock()
 
 	return nil
 }
